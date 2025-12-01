@@ -91,23 +91,35 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        // Imports for Firestore functions including setDoc for user profile creation
+        // 注意：我們將不再使用 signInWithCustomToken，而是使用 signInAnonymously
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, query, onSnapshot, doc, updateDoc, getDoc, setDoc, increment, deleteField } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
-        // --- Global Variables provided by Canvas environment ---
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        // =========================================================================
+        // --- 1. FIREBASE 配置 (用於 GitHub Pages 或自託管) ---
+        // =========================================================================
+        /** * 🚨🚨🚨 重要：請將以下配置替換為您自己的 Firebase 專案配置！
+         * 登入您的 Firebase Console，選擇您的專案，點擊左側導覽列的「Project settings」
+         * 選擇 Web App，並複製配置物件到下方。 
+         */
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY", 
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT_ID.appspot.com",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+        // =========================================================================
 
         let db;
         let auth;
-        let currentUserId = 'anonymous'; // Will be updated after auth
-        let currentUsername = 'GuestUser'; // Will be loaded from Firestore
-        let allPostsCache = []; // Store all fetched posts
-        let showMyPostsOnly = false; // State for the filter
+        let currentUserId = 'anonymous'; 
+        let currentUsername = 'GuestUser'; 
+        let allPostsCache = []; 
+        let showMyPostsOnly = false; 
 
-        // --- Utility Functions ---
+        // --- Utility Functions (不變) ---
 
         /** Shows a custom modal instead of alert() */
         function showModal(title, message) {
@@ -148,15 +160,17 @@
             renderThreads(allPostsCache); // Re-render with the new filter applied to the cached data
         }
 
-        // --- Firebase Setup and Authentication ---
+        // =========================================================================
+        // --- 2. FIREBASE 路徑變更 (使用根級集合) ---
+        // =========================================================================
 
+        // 簡化路徑: 移除了 Canvas 特有的 /artifacts/{appId}/public/data/ 前綴
         const getUsersCollectionRef = () => {
-            // Public collection path for user profiles: /artifacts/{appId}/public/data/users
-            return collection(db, `artifacts/${appId}/public/data/users`);
+            return collection(db, `users`);
         }
         
         const getUserDocRef = (userId) => {
-            return doc(db, `artifacts/${appId}/public/data/users`, userId);
+            return doc(db, `users`, userId);
         }
 
         /** Fetches or creates the user's public profile (username). */
@@ -166,17 +180,14 @@
             const defaultUsername = `User-${userId.substring(0, 8)}`;
 
             if (userSnap.exists()) {
-                // User exists, load username
                 currentUsername = userSnap.data().username || defaultUsername;
             } else {
-                // New user, create profile
                 currentUsername = defaultUsername;
                 await setDoc(userDocRef, {
                     username: currentUsername,
                     created_at: Date.now()
                 });
             }
-            // Update UI with the loaded/default username
             document.getElementById('current-username-display').textContent = currentUsername;
             document.getElementById('username-input').value = currentUsername;
         }
@@ -202,10 +213,7 @@
             const userDocRef = getUserDocRef(currentUserId);
             
             try {
-                // Update Firestore profile
                 await updateDoc(userDocRef, { username: newUsername });
-                
-                // Update local state and UI
                 currentUsername = newUsername;
                 document.getElementById('current-username-display').textContent = currentUsername;
 
@@ -216,28 +224,33 @@
             }
         }
 
+        // =========================================================================
+        // --- 3. 認證及初始化 (使用標準匿名登入) ---
+        // =========================================================================
         async function setupAuthAndFirebase() {
+            if (!firebaseConfig.apiKey.includes("YOUR")) {
+                 console.log("Using provided Firebase configuration.");
+            } else {
+                showModal("Configuration Required", "You must replace the placeholder Firebase config in the code to run on GitHub Pages.");
+                // For demonstration purposes, we will proceed, but it will fail unless config is real.
+            }
+
             try {
+                // Initialize using the hardcoded configuration object
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
 
-                // Try to sign in with the provided token, otherwise sign in anonymously
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } else {
-                    await signInAnonymously(auth);
-                }
+                // For GitHub hosting, we rely solely on standard Anonymous Sign-In
+                await signInAnonymously(auth);
                 
                 onAuthStateChanged(auth, async (user) => {
                     if (user) {
                         currentUserId = user.uid;
                         document.getElementById('current-user-id').textContent = currentUserId;
                         
-                        // Initialize user profile (fetch or create username)
                         await initializeUserProfile(user.uid); 
-
-                        listenForPosts(); // Start listening for data once authenticated
+                        listenForPosts(); 
                     } else {
                         currentUserId = null;
                         document.getElementById('current-user-id').textContent = 'Not signed in';
@@ -251,15 +264,16 @@
             }
         }
 
-        // --- Firestore Operations (Posts) ---
+        // --- Firestore Operations (Posts - 變更路徑) ---
 
         const getPostsCollectionRef = () => {
-            // Public collection path: /artifacts/{appId}/public/data/posts
-            return collection(db, `artifacts/${appId}/public/data/posts`);
+            // 簡化路徑: 移除了 Canvas 特有的 /artifacts/{appId}/public/data/ 前綴
+            return collection(db, `posts`);
         }
         
         const getPostDocRef = (postId) => {
-            return doc(db, `artifacts/${appId}/public/data/posts`, postId);
+            // 簡化路徑: 移除了 Canvas 特有的 /artifacts/{appId}/public/data/ 前綴
+            return doc(db, `posts`, postId);
         }
 
         /** Handles posting a new thread or a reply. */
@@ -268,7 +282,7 @@
                 showModal("Access Denied", "Please wait for authentication to complete before posting.");
                 return;
             }
-
+            // ... (rest of handlePost is unchanged logic)
             const inputId = parentId ? `reply-content-${parentId}` : 'thread-content';
             const contentInput = document.getElementById(inputId);
             const content = contentInput.value.trim();
@@ -278,27 +292,24 @@
                 return;
             }
             
-            // Disable button during post submission
             const button = contentInput.nextElementSibling;
             if (button && button.tagName === 'BUTTON') button.disabled = true;
 
             const newPost = {
                 userId: currentUserId,
-                username: currentUsername, // Use the current, updated username
+                username: currentUsername, 
                 content: content,
                 timestamp: Date.now(),
                 parentId: parentId || null,
-                // Initialize vote counts and map
                 likeCount: 0,
                 dislikeCount: 0,
-                votes: {} // Stores userId: 1 (like) or -1 (dislike)
+                votes: {} 
             };
 
             try {
                 await addDoc(getPostsCollectionRef(), newPost);
-                contentInput.value = ''; // Clear input field
+                contentInput.value = ''; 
 
-                // Hide reply form if it was a reply
                 if (parentId) {
                     toggleReplyForm(parentId);
                 }
@@ -322,7 +333,6 @@
             const postRef = getPostDocRef(postId);
 
             try {
-                // 1. Get the current vote status
                 const docSnap = await getDoc(postRef);
                 if (!docSnap.exists()) {
                     showModal("Error", "Post not found.");
@@ -331,38 +341,35 @@
                 
                 const postData = docSnap.data();
                 const currentVote = postData.votes?.[currentUserId] || 0;
-                const newVoteValue = voteType; // 1 (like) or -1 (dislike)
+                const newVoteValue = voteType; 
                 
                 let updatePayload = {};
                 let voteChanged = false;
 
                 if (currentVote === newVoteValue) {
-                    // Scenario 1: User is removing their existing vote (undo)
                     const voteKey = currentVote === 1 ? 'likeCount' : 'dislikeCount';
                     
                     updatePayload = {
-                        [voteKey]: increment(-1), // Decrement count
-                        [`votes.${currentUserId}`]: deleteField() // Remove user's vote entry
+                        [voteKey]: increment(-1), 
+                        [`votes.${currentUserId}`]: deleteField() 
                     };
                     voteChanged = true;
                 } else if (currentVote === 0) {
-                    // Scenario 2: User is setting a new vote
                     const voteKey = newVoteValue === 1 ? 'likeCount' : 'dislikeCount';
 
                     updatePayload = {
-                        [voteKey]: increment(1), // Increment new count
-                        [`votes.${currentUserId}`]: newVoteValue // Set user's vote
+                        [voteKey]: increment(1), 
+                        [`votes.${currentUserId}`]: newVoteValue 
                     };
                     voteChanged = true;
                 } else {
-                    // Scenario 3: User is switching their vote (e.g., from like to dislike)
                     const oldVoteKey = currentVote === 1 ? 'likeCount' : 'dislikeCount';
                     const newVoteKey = newVoteValue === 1 ? 'likeCount' : 'dislikeCount';
 
                     updatePayload = {
-                        [oldVoteKey]: increment(-1), // Decrement old count
-                        [newVoteKey]: increment(1),  // Increment new count
-                        [`votes.${currentUserId}`]: newVoteValue // Update user's vote
+                        [oldVoteKey]: increment(-1), 
+                        [newVoteKey]: increment(1),  
+                        [`votes.${currentUserId}`]: newVoteValue 
                     };
                     voteChanged = true;
                 }
@@ -370,7 +377,6 @@
                 if (voteChanged) {
                     await updateDoc(postRef, updatePayload);
                 }
-                // The onSnapshot listener will automatically re-render the post with the new counts.
 
             } catch (e) {
                 console.error("Error handling vote:", e);
@@ -379,13 +385,15 @@
         }
 
 
+        // --- ListenForPosts and Rendering Logic (No Change) ---
+
         /** Listen for real-time updates to all posts */
         function listenForPosts() {
             const postsRef = getPostsCollectionRef();
-            const q = query(postsRef); // We'll sort in memory
+            const q = query(postsRef); 
             
-            const loadingMessage = document.getElementById('loading-message'); // Get element reference
-            if (loadingMessage) { // Check if element exists before accessing properties
+            const loadingMessage = document.getElementById('loading-message'); 
+            if (loadingMessage) { 
                 loadingMessage.textContent = 'Loading posts...';
                 loadingMessage.classList.remove('hidden');
             }
@@ -393,7 +401,6 @@
             onSnapshot(q, (querySnapshot) => {
                 const fetchedPosts = [];
                 querySnapshot.forEach((doc) => {
-                    // Ensure default vote structure exists for rendering if missing
                     const data = doc.data();
                     fetchedPosts.push({ 
                         id: doc.id, 
@@ -404,19 +411,15 @@
                     });
                 });
                 
-                // --- NEW SORTING LOGIC: Most Liked First, then Newest First for ties ---
                 fetchedPosts.sort((a, b) => {
-                    // Primary sort: by likeCount (descending)
                     if (b.likeCount !== a.likeCount) {
                         return b.likeCount - a.likeCount; 
                     }
-                    // Secondary sort (tie-breaker): by timestamp (descending - newest first)
                     return b.timestamp - a.timestamp; 
                 });
-                // --- END NEW SORTING LOGIC ---
 
-                allPostsCache = fetchedPosts; // Cache the full list, now sorted by likes
-                renderThreads(allPostsCache); // Render based on the current filter state
+                allPostsCache = fetchedPosts; 
+                renderThreads(allPostsCache); 
             }, (error) => {
                 console.error("Error listening to posts:", error);
                 const loadingMessage = document.getElementById('loading-message');
@@ -426,15 +429,12 @@
             });
         }
 
-        // --- Rendering Logic ---
-
         /** Creates the HTML for a single post's header and content (reusable part) */
         function createPostContent(post, isNested = false) {
             const postDiv = document.createElement('div');
-            // Main threads get the strong blue border; nested replies get a lighter background.
             postDiv.className = !isNested
-                ? 'bg-white p-4 rounded-xl shadow-md relative border-l-4 border-indigo-600' // Main Thread Card
-                : 'bg-gray-50 p-3 rounded-lg relative'; // Nested Reply Box
+                ? 'bg-white p-4 rounded-xl shadow-md relative border-l-4 border-indigo-600'
+                : 'bg-gray-50 p-3 rounded-lg relative'; 
             
             const header = document.createElement('div');
             header.className = 'flex items-center justify-between mb-1';
@@ -444,7 +444,6 @@
 
             const usernameSpan = document.createElement('span');
             usernameSpan.textContent = post.username;
-            // Highlight the user's own posts
             usernameSpan.className = 'font-bold text-sm ' + (post.userId === currentUserId ? 'text-indigo-600' : 'text-gray-800');
             
             const timeSpan = document.createElement('span');
@@ -501,7 +500,7 @@
             }`;
             dislikeButton.innerHTML = `
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 fill-current ${dislikeActive ? 'text-red-600' : 'text-gray-400'}" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-3"></path>
+                    <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zM7 14h3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-3"></path>
                 </svg>
                 <span>${post.dislikeCount}</span>
             `;
@@ -516,14 +515,11 @@
         /** Recursively renders a single post and its children (replies). */
         function renderPostAndChildren(post, allPostsByParent, isNested) {
             const postContainer = document.createElement('div');
-            // Main thread: large margin. Nested reply: minimal vertical margin.
             postContainer.className = 'post-container relative ' + (isNested ? 'pt-1 pb-1' : 'mb-6');
             
-            // 1. Render the current post's content
             const postContent = createPostContent(post, isNested);
             postContainer.appendChild(postContent);
 
-            // 2. Add Reply Button and Form
             const replyActionDiv = document.createElement('div');
             replyActionDiv.className = 'py-2';
 
@@ -534,7 +530,6 @@
             replyActionDiv.appendChild(replyBtn);
             postContainer.appendChild(replyActionDiv);
 
-            // Reply Form Container (initially hidden)
             const replyFormContainer = document.createElement('div');
             replyFormContainer.id = `reply-form-${post.id}`;
             replyFormContainer.className = 'mt-1 mb-2 hidden';
@@ -550,19 +545,14 @@
             `;
             postContainer.appendChild(replyFormContainer);
             
-            // 3. Render Replies (Children) Recursively
             const replies = allPostsByParent[post.id] || [];
             if (replies.length > 0) {
-                // Wrapper for replies to show the vertical connection line
                 const repliesWrapper = document.createElement('div');
-                // ml-4 provides indentation, border-l-2 is the connecting line, pl-4 pushes content away from the line
                 repliesWrapper.className = 'relative mt-2 pt-2 ml-4 border-l-2 border-gray-200'; 
                 
-                // Sort replies oldest first (ascending timestamp)
                 replies.sort((a, b) => a.timestamp - b.timestamp);
 
                 replies.forEach(reply => {
-                    // Recursive call with isNested=true
                     const childElement = renderPostAndChildren(reply, allPostsByParent, true); 
                     repliesWrapper.appendChild(childElement);
                 });
@@ -589,7 +579,6 @@
                 loadingMessage.classList.add('hidden');
             }
             
-            // 1. Group ALL posts (threads and replies) by their parentId
             const allPostsByParent = posts.reduce((acc, post) => {
                 const parentId = post.parentId || 'root'; 
                 if (!acc[parentId]) acc[parentId] = [];
@@ -597,20 +586,13 @@
                 return acc;
             }, {});
             
-            // 2. Main threads are posts whose parentId is null
             const threads = posts.filter(p => p.parentId === null);
 
-            // 3. Apply 'Show My Posts Only' filter to determine visible main threads
-            // A thread is visible if the current user posted the thread OR if the current user replied to it.
             const visibleThreads = showMyPostsOnly 
                 ? threads.filter(t => t.userId === currentUserId || (allPostsByParent[t.id] && allPostsByParent[t.id].some(r => r.userId === currentUserId)))
                 : threads;
-
-            // Note: visibleThreads retains the order of the underlying allPostsCache,
-            // which is now sorted by likeCount (desc) then timestamp (desc).
             
             visibleThreads.forEach(thread => {
-                // Use the recursive function to render the thread and its children
                 const threadElement = renderPostAndChildren(thread, allPostsByParent, false);
                 threadsContainer.appendChild(threadElement);
             });
